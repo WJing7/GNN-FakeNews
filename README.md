@@ -1,7 +1,6 @@
 # GNN-based Fake News Detection
 [![Open in Code Ocean](https://codeocean.com/codeocean-assets/badge/open-in-code-ocean.svg)](https://codeocean.com/capsule/7305473/tree)
-[![PWC](https://img.shields.io/endpoint.svg?url=https://paperswithcode.com/badge/user-preference-aware-fake-news-detection/graph-classification-on-upfd-gos)](https://paperswithcode.com/sota/graph-classification-on-upfd-gos?p=user-preference-aware-fake-news-detection)
-[![PWC](https://img.shields.io/endpoint.svg?url=https://paperswithcode.com/badge/user-preference-aware-fake-news-detection/graph-classification-on-upfd-pol)](https://paperswithcode.com/sota/graph-classification-on-upfd-pol?p=user-preference-aware-fake-news-detection)
+
 
 [Installation](#installation) | [Datasets](#datasets) | [Models](#models) |  [PyG Example](https://github.com/rusty1s/pytorch_geometric/blob/master/examples/upfd.py)  | [DGL Example](https://github.com/dmlc/dgl/blob/master/python/dgl/data/fakenews.py)   | [Benchmark](https://paperswithcode.com/dataset/upfd) | [Intro Video](https://youtu.be/QAIVFr24FrA) | [How to Contribute](#how-to-contribute)
 
