@@ -2,6 +2,9 @@ import argparse
 import time
 from tqdm import tqdm
 import copy as cp
+import os
+import sys
+sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
 import torch
 import torch.nn.functional as F
@@ -13,6 +16,7 @@ from torch_geometric.data import DataLoader, DataListLoader
 
 from utils.data_loader import *
 from utils.eval_helper import *
+from utils.node_weight import WeightedReadout
 
 
 """
@@ -32,6 +36,8 @@ class Model(torch.nn.Module):
 		self.dropout_ratio = args.dropout_ratio
 		self.model = args.model
 		self.concat = concat
+		self.use_weighted_readout = args.weighted_readout
+		self.readout_layer = WeightedReadout() if self.use_weighted_readout else None
 
 		if self.model == 'gcn':
 			self.conv1 = GCNConv(self.num_features, self.nhid)
@@ -53,7 +59,10 @@ class Model(torch.nn.Module):
 		edge_attr = None
 
 		x = F.relu(self.conv1(x, edge_index, edge_attr))
-		x = gmp(x, batch)
+		if self.use_weighted_readout:
+			x = self.readout_layer(x, data)
+		else:
+			x = gmp(x, batch)
 
 		if self.concat:
 			news = torch.stack([data.x[(data.batch == idx).nonzero().squeeze()[0]] for idx in range(data.num_graphs)])
@@ -103,6 +112,7 @@ parser.add_argument('--concat', type=bool, default=True, help='whether concat ne
 parser.add_argument('--multi_gpu', type=bool, default=False, help='multi-gpu mode')
 parser.add_argument('--feature', type=str, default='bert', help='feature type, [profile, spacy, bert, content]')
 parser.add_argument('--model', type=str, default='sage', help='model type, [gcn, gat, sage]')
+parser.add_argument('--weighted_readout', action='store_true', help='use weighted readout instead of max pooling')
 
 args = parser.parse_args()
 torch.manual_seed(args.seed)

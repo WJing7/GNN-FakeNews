@@ -1,6 +1,9 @@
 import argparse
 from tqdm import tqdm
 from math import ceil
+import os
+import sys
+sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
 import torch
 import torch.nn.functional as F

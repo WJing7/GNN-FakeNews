@@ -1,4 +1,6 @@
-
+1.py
+UPFD_Dataset/
+utils/__pycache__/
 *.xml
 *.iml
 .idea/dictionaries

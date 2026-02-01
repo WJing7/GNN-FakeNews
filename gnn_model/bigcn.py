@@ -15,6 +15,7 @@ from torch_geometric.nn import DataParallel
 
 from utils.data_loader import *
 from utils.eval_helper import *
+from utils.node_weight import WeightedReadout
 
 """
 
@@ -28,10 +29,11 @@ Source Code: https://github.com/TianBian95/BiGCN
 
 
 class TDrumorGCN(torch.nn.Module):
-	def __init__(self, in_feats, hid_feats, out_feats):
+	def __init__(self, in_feats, hid_feats, out_feats, use_weighted_readout=False):
 		super(TDrumorGCN, self).__init__()
 		self.conv1 = GCNConv(in_feats, hid_feats)
 		self.conv2 = GCNConv(hid_feats+in_feats, out_feats)
+		self.readout = WeightedReadout() if use_weighted_readout else None
 
 	def forward(self, data):
 		x, edge_index = data.x, data.edge_index
@@ -56,16 +58,20 @@ class TDrumorGCN(torch.nn.Module):
 			index = (torch.eq(data.batch, num_batch))
 			root_extend[index] = x2[rootindex[num_batch]]
 		x = torch.cat((x, root_extend), 1)
-		x = scatter_mean(x, data.batch, dim=0)
+		if self.readout is None:
+			x = scatter_mean(x, data.batch, dim=0)
+		else:
+			x = self.readout(x, data, edge_index=edge_index)
 
 		return x
 
 
 class BUrumorGCN(torch.nn.Module):
-	def __init__(self, in_feats, hid_feats, out_feats):
+	def __init__(self, in_feats, hid_feats, out_feats, use_weighted_readout=False):
 		super(BUrumorGCN, self).__init__()
 		self.conv1 = GCNConv(in_feats, hid_feats)
 		self.conv2 = GCNConv(hid_feats+in_feats, out_feats)
+		self.readout = WeightedReadout() if use_weighted_readout else None
 
 	def forward(self, data):
 		x, edge_index = data.x, data.BU_edge_index
@@ -91,15 +97,24 @@ class BUrumorGCN(torch.nn.Module):
 			root_extend[index] = x2[rootindex[num_batch]]
 		x = torch.cat((x, root_extend), 1)
 
-		x = scatter_mean(x, data.batch, dim=0)
+		if self.readout is None:
+			x = scatter_mean(x, data.batch, dim=0)
+		else:
+			x = self.readout(x, data, edge_index=data.edge_index)
 		return x
 
 
 class Net(torch.nn.Module):
-	def __init__(self, in_feats, hid_feats, out_feats):
+	def __init__(self, in_feats, hid_feats, out_feats, use_weighted_readout=False):
 		super(Net, self).__init__()
-		self.TDrumorGCN = TDrumorGCN(in_feats, hid_feats, out_feats)
-		self.BUrumorGCN = BUrumorGCN(in_feats, hid_feats, out_feats)
+		self.TDrumorGCN = TDrumorGCN(
+			in_feats, hid_feats, out_feats,
+			use_weighted_readout=use_weighted_readout,
+		)
+		self.BUrumorGCN = BUrumorGCN(
+			in_feats, hid_feats, out_feats,
+			use_weighted_readout=use_weighted_readout,
+		)
 		self.fc = torch.nn.Linear((out_feats+hid_feats) * 2, 2)
 
 	def forward(self, data):
@@ -146,6 +161,7 @@ parser.add_argument('--BUdroprate', type=float, default=0.2, help='dropout ratio
 parser.add_argument('--epochs', type=int, default=45, help='maximum number of epochs')
 parser.add_argument('--multi_gpu', type=bool, default=False, help='multi-gpu mode')
 parser.add_argument('--feature', type=str, default='profile', help='feature type, [profile, spacy, bert, content]')
+parser.add_argument('--weighted_readout', action='store_true', help='use weighted readout instead of mean pooling')
 
 args = parser.parse_args()
 torch.manual_seed(args.seed)
@@ -174,7 +190,12 @@ train_loader = loader(training_set, batch_size=args.batch_size, shuffle=True)
 val_loader = loader(validation_set, batch_size=args.batch_size, shuffle=False)
 test_loader = loader(test_set, batch_size=args.batch_size, shuffle=False)
 
-model = Net(args.num_features, args.nhid, args.nhid)
+model = Net(
+	args.num_features,
+	args.nhid,
+	args.nhid,
+	use_weighted_readout=args.weighted_readout,
+)
 if args.multi_gpu:
 	model = DataParallel(model)
 model = model.to(args.device)

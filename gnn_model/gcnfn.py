@@ -2,6 +2,9 @@ import argparse
 import time
 from tqdm import tqdm
 import copy as cp
+import os
+import sys
+sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 import torch.nn.functional as F
 from torch.utils.data import random_split
 from torch_geometric.data import DataLoader, DataListLoader
@@ -11,6 +14,7 @@ from torch_geometric.nn import global_mean_pool, GATConv
 
 from utils.data_loader import *
 from utils.eval_helper import *
+from utils.node_weight import WeightedReadout
 
 
 """
@@ -39,6 +43,7 @@ class Net(torch.nn.Module):
 		self.num_classes = args.num_classes
 		self.nhid = args.nhid
 		self.concat = concat
+		self.readout = WeightedReadout() if args.weighted_readout else None
 
 		self.conv1 = GATConv(self.num_features, self.nhid * 2)
 		self.conv2 = GATConv(self.nhid * 2, self.nhid * 2)
@@ -57,7 +62,11 @@ class Net(torch.nn.Module):
 
 		x = F.selu(self.conv1(x, edge_index))
 		x = F.selu(self.conv2(x, edge_index))
-		x = F.selu(global_mean_pool(x, batch))
+		if self.readout is None:
+			x = global_mean_pool(x, batch)
+		else:
+			x = self.readout(x, data)
+		x = F.selu(x)
 		x = F.selu(self.fc1(x))
 		x = F.dropout(x, p=0.5, training=self.training)
 
@@ -107,6 +116,7 @@ parser.add_argument('--epochs', type=int, default=60, help='maximum number of ep
 parser.add_argument('--concat', type=bool, default=False, help='whether concat news embedding and graph embedding')
 parser.add_argument('--multi_gpu', type=bool, default=False, help='multi-gpu mode')
 parser.add_argument('--feature', type=str, default='spacy', help='feature type, [profile, spacy, bert, content]')
+parser.add_argument('--weighted_readout', action='store_true', help='use weighted readout instead of mean pooling')
 
 args = parser.parse_args()
 torch.manual_seed(args.seed)
