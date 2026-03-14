@@ -41,7 +41,15 @@ class Model(torch.nn.Module):
 		self.model = args.model
 		self.concat = concat
 		self.use_weighted_readout = args.weighted_readout
-		self.readout_layer = WeightedReadout() if self.use_weighted_readout else None
+		self.readout_layer = None
+		self.readout_fuse = None
+		if self.use_weighted_readout:
+			self.readout_layer = WeightedReadout(
+				node_dim=self.nhid,
+				attr_dim=args.profile_dim,
+				hidden_dim=self.nhid,
+			)
+			self.readout_fuse = torch.nn.Linear(self.nhid * 2, self.nhid)
 
 		if self.model == 'gcn':
 			self.conv1 = GCNConv(self.num_features, self.nhid)
@@ -64,7 +72,20 @@ class Model(torch.nn.Module):
 
 		x = F.relu(self.conv1(x, edge_index, edge_attr))
 		if self.use_weighted_readout:
-			x = self.readout_layer(x, data)
+			attr_x = getattr(data, 'profile_x', None)
+			if attr_x is None and self.args.feature == 'profile':
+				attr_x = data.x
+			readout_edge_index = getattr(data, 'readout_edge_index', edge_index)
+			struct_x = getattr(data, 'struct_x', None)
+			weighted_x = self.readout_layer(
+				x,
+				data,
+				attr_x=attr_x,
+				edge_index=readout_edge_index,
+				struct_x=struct_x,
+			)
+			base_x = gmp(x, batch)
+			x = F.relu(self.readout_fuse(torch.cat([weighted_x, base_x], dim=1)))
 		else:
 			x = gmp(x, batch)
 
@@ -160,10 +181,22 @@ sys.stderr = Tee(stderr_stream, log_handle)
 atexit.register(log_handle.close)
 set_seed(args.seed)
 
-dataset = FNNDataset(root='data', feature=args.feature, empty=False, name=args.dataset, transform=ToUndirected())
+aux_feature = 'profile' if args.weighted_readout and args.feature != 'profile' else None
+dataset = FNNDataset(
+	root='data',
+	feature=args.feature,
+	aux_feature=aux_feature,
+	include_readout=args.weighted_readout,
+	empty=False,
+	name=args.dataset,
+	transform=ToUndirected(),
+)
 
 args.num_classes = dataset.num_classes
 args.num_features = dataset.num_features
+args.profile_dim = dataset.num_profile_features if dataset.num_profile_features > 0 else (
+	args.num_features if args.feature == 'profile' else 0
+)
 
 print(f'Log file: {log_path}')
 print(args)

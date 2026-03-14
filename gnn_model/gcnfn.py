@@ -43,7 +43,13 @@ class Net(torch.nn.Module):
 		self.num_classes = args.num_classes
 		self.nhid = args.nhid
 		self.concat = concat
-		self.readout = WeightedReadout() if args.weighted_readout else None
+		self.readout = None
+		if args.weighted_readout:
+			self.readout = WeightedReadout(
+				node_dim=self.nhid * 2,
+				attr_dim=min(10, self.num_features),
+				hidden_dim=self.nhid,
+			)
 
 		self.conv1 = GATConv(self.num_features, self.nhid * 2)
 		self.conv2 = GATConv(self.nhid * 2, self.nhid * 2)

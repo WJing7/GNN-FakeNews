@@ -33,7 +33,13 @@ class TDrumorGCN(torch.nn.Module):
 		super(TDrumorGCN, self).__init__()
 		self.conv1 = GCNConv(in_feats, hid_feats)
 		self.conv2 = GCNConv(hid_feats+in_feats, out_feats)
-		self.readout = WeightedReadout() if use_weighted_readout else None
+		self.readout = None
+		if use_weighted_readout:
+			self.readout = WeightedReadout(
+				node_dim=hid_feats + out_feats,
+				attr_dim=min(10, in_feats),
+				hidden_dim=hid_feats,
+			)
 
 	def forward(self, data):
 		x, edge_index = data.x, data.edge_index
@@ -71,7 +77,13 @@ class BUrumorGCN(torch.nn.Module):
 		super(BUrumorGCN, self).__init__()
 		self.conv1 = GCNConv(in_feats, hid_feats)
 		self.conv2 = GCNConv(hid_feats+in_feats, out_feats)
-		self.readout = WeightedReadout() if use_weighted_readout else None
+		self.readout = None
+		if use_weighted_readout:
+			self.readout = WeightedReadout(
+				node_dim=hid_feats + out_feats,
+				attr_dim=min(10, in_feats),
+				hidden_dim=hid_feats,
+			)
 
 	def forward(self, data):
 		x, edge_index = data.x, data.BU_edge_index

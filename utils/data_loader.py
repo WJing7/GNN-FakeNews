@@ -11,6 +11,8 @@ import random
 import numpy as np
 import scipy.sparse as sp
 
+from utils.node_weight import build_structural_features
+
 """
 	Functions to help load the graph data
 """
@@ -18,6 +20,10 @@ import scipy.sparse as sp
 def read_file(folder, name, dtype=None):
 	path = osp.join(folder, '{}.txt'.format(name))
 	return read_txt_array(path, sep=',', dtype=dtype)
+
+
+def load_feature_matrix(folder, feature):
+	return torch.from_numpy(sp.load_npz(folder + f'new_{feature}_feature.npz').todense()).to(torch.float)
 
 
 def split(data, batch):
@@ -39,8 +45,19 @@ def split(data, batch):
 	slices = {'edge_index': edge_slice}
 	if data.x is not None:
 		slices['x'] = node_slice
+	if getattr(data, 'profile_x', None) is not None:
+		slices['profile_x'] = node_slice
+	if getattr(data, 'struct_x', None) is not None:
+		slices['struct_x'] = node_slice
 	if data.edge_attr is not None:
 		slices['edge_attr'] = edge_slice
+	if getattr(data, 'readout_edge_index', None) is not None:
+		readout_row, _ = data.readout_edge_index
+		readout_counts = np.bincount(batch[readout_row], minlength=int(batch[-1]) + 1)
+		readout_edge_slice = torch.cumsum(torch.from_numpy(readout_counts), 0)
+		readout_edge_slice = torch.cat([torch.tensor([0]), readout_edge_slice])
+		data.readout_edge_index -= node_slice[batch[readout_row]].unsqueeze(0)
+		slices['readout_edge_index'] = readout_edge_slice
 	if data.y is not None:
 		if data.y.size(0) == batch.size(0):
 			slices['y'] = node_slice
@@ -50,28 +67,34 @@ def split(data, batch):
 	return data, slices
 
 
-def read_graph_data(folder, feature):
+def read_graph_data(folder, feature, aux_feature=None, include_readout=False):
 	"""
 	PyG util code to create PyG data instance from raw graph data
 	"""
 
-	node_attributes = sp.load_npz(folder + f'new_{feature}_feature.npz')
+	x = load_feature_matrix(folder, feature)
+	profile_x = load_feature_matrix(folder, aux_feature) if aux_feature is not None else None
 	edge_index = read_file(folder, 'A', torch.long).t()
 	node_graph_id = np.load(folder + 'node_graph_id.npy')
 	graph_labels = np.load(folder + 'graph_labels.npy')
 
 
 	edge_attr = None
-	x = torch.from_numpy(node_attributes.todense()).to(torch.float)
 	node_graph_id = torch.from_numpy(node_graph_id).to(torch.long)
 	y = torch.from_numpy(graph_labels).to(torch.long)
 	_, y = y.unique(sorted=True, return_inverse=True)
 
 	num_nodes = edge_index.max().item() + 1 if x is None else x.size(0)
-	edge_index, edge_attr = add_self_loops(edge_index, edge_attr)
+	readout_edge_index, _ = coalesce(edge_index, None, num_nodes, num_nodes)
+	edge_index, edge_attr = add_self_loops(readout_edge_index, edge_attr)
 	edge_index, edge_attr = coalesce(edge_index, edge_attr, num_nodes, num_nodes)
 
 	data = Data(x=x, edge_index=edge_index, edge_attr=edge_attr, y=y)
+	if profile_x is not None:
+		data.profile_x = profile_x
+	if include_readout:
+		data.readout_edge_index = readout_edge_index
+		data.struct_x = build_structural_features(readout_edge_index, node_graph_id)
 	data, slices = split(data, node_graph_id)
 
 	return data, slices
@@ -164,10 +187,12 @@ class FNNDataset(InMemoryDataset):
 			final dataset. (default: :obj:`None`)
 	"""
 
-	def __init__(self, root, name, feature='spacy', empty=False, transform=None, pre_transform=None, pre_filter=None):
+	def __init__(self, root, name, feature='spacy', aux_feature=None, include_readout=False, empty=False, transform=None, pre_transform=None, pre_filter=None):
 		self.name = name
 		self.root = root
 		self.feature = feature
+		self.aux_feature = aux_feature
+		self.include_readout = include_readout
 		super(FNNDataset, self).__init__(root, transform, pre_transform, pre_filter)
 		if not empty:
 			self.data, self.slices, self.train_idx, self.val_idx, self.test_idx = torch.load(self.processed_paths[0])
@@ -189,23 +214,40 @@ class FNNDataset(InMemoryDataset):
 		return self.data.x.size(1)
 
 	@property
+	def num_profile_features(self):
+		profile_x = getattr(self.data, 'profile_x', None)
+		if profile_x is None:
+			return 0
+		return profile_x.size(1)
+
+	@property
 	def raw_file_names(self):
 		names = ['node_graph_id', 'graph_labels']
 		return ['{}.npy'.format(name) for name in names]
 
 	@property
 	def processed_file_names(self):
+		suffix = self.feature
+		if self.aux_feature is not None:
+			suffix = f'{suffix}_{self.aux_feature}'
+		if self.include_readout:
+			suffix = f'{suffix}_readout'
 		if self.pre_filter is None:
-			return f'{self.name[:3]}_data_{self.feature}.pt'
+			return f'{self.name[:3]}_data_{suffix}.pt'
 		else:
-			return f'{self.name[:3]}_data_{self.feature}_prefiler.pt'
+			return f'{self.name[:3]}_data_{suffix}_prefiler.pt'
 
 	def download(self):
 		raise NotImplementedError('Must indicate valid location of raw data. No download allowed')
 
 	def process(self):
 
-		self.data, self.slices = read_graph_data(self.raw_dir, self.feature)
+		self.data, self.slices = read_graph_data(
+			self.raw_dir,
+			self.feature,
+			aux_feature=self.aux_feature,
+			include_readout=self.include_readout,
+		)
 
 		if self.pre_filter is not None:
 			data_list = [self.get(idx) for idx in range(len(self))]
