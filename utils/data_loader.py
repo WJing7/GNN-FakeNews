@@ -67,7 +67,15 @@ def split(data, batch):
 	return data, slices
 
 
-def read_graph_data(folder, feature, aux_feature=None, include_readout=False):
+def read_graph_data(
+	folder,
+	feature,
+	aux_feature=None,
+	include_readout=False,
+	use_root_prox=True,
+	use_subtree=True,
+	use_degree=True,
+):
 	"""
 	PyG util code to create PyG data instance from raw graph data
 	"""
@@ -94,7 +102,13 @@ def read_graph_data(folder, feature, aux_feature=None, include_readout=False):
 		data.profile_x = profile_x
 	if include_readout:
 		data.readout_edge_index = readout_edge_index
-		data.struct_x = build_structural_features(readout_edge_index, node_graph_id)
+		data.struct_x = build_structural_features(
+			readout_edge_index,
+			node_graph_id,
+			use_root_prox=use_root_prox,
+			use_subtree=use_subtree,
+			use_degree=use_degree,
+		)
 	data, slices = split(data, node_graph_id)
 
 	return data, slices
@@ -187,12 +201,29 @@ class FNNDataset(InMemoryDataset):
 			final dataset. (default: :obj:`None`)
 	"""
 
-	def __init__(self, root, name, feature='spacy', aux_feature=None, include_readout=False, empty=False, transform=None, pre_transform=None, pre_filter=None):
+	def __init__(
+		self,
+		root,
+		name,
+		feature='spacy',
+		aux_feature=None,
+		include_readout=False,
+		use_root_prox=True,
+		use_subtree=True,
+		use_degree=True,
+		empty=False,
+		transform=None,
+		pre_transform=None,
+		pre_filter=None,
+	):
 		self.name = name
 		self.root = root
 		self.feature = feature
 		self.aux_feature = aux_feature
 		self.include_readout = include_readout
+		self.use_root_prox = use_root_prox
+		self.use_subtree = use_subtree
+		self.use_degree = use_degree
 		super(FNNDataset, self).__init__(root, transform, pre_transform, pre_filter)
 		if not empty:
 			self.data, self.slices, self.train_idx, self.val_idx, self.test_idx = torch.load(self.processed_paths[0])
@@ -231,7 +262,15 @@ class FNNDataset(InMemoryDataset):
 		if self.aux_feature is not None:
 			suffix = f'{suffix}_{self.aux_feature}'
 		if self.include_readout:
-			suffix = f'{suffix}_readout'
+			struct_parts = []
+			if self.use_root_prox:
+				struct_parts.append('root')
+			if self.use_subtree:
+				struct_parts.append('subtree')
+			if self.use_degree:
+				struct_parts.append('degree')
+			struct_suffix = '_'.join(struct_parts) if struct_parts else 'none'
+			suffix = f'{suffix}_readout_{struct_suffix}'
 		if self.pre_filter is None:
 			return f'{self.name[:3]}_data_{suffix}.pt'
 		else:
@@ -247,6 +286,9 @@ class FNNDataset(InMemoryDataset):
 			self.feature,
 			aux_feature=self.aux_feature,
 			include_readout=self.include_readout,
+			use_root_prox=self.use_root_prox,
+			use_subtree=self.use_subtree,
+			use_degree=self.use_degree,
 		)
 
 		if self.pre_filter is not None:

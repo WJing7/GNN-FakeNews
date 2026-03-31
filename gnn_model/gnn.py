@@ -42,14 +42,17 @@ class Model(torch.nn.Module):
 		self.concat = concat
 		self.use_weighted_readout = args.weighted_readout
 		self.readout_layer = None
-		self.readout_fuse = None
+		self.readout_gate = None
 		if self.use_weighted_readout:
 			self.readout_layer = WeightedReadout(
 				node_dim=self.nhid,
 				attr_dim=args.profile_dim,
 				hidden_dim=self.nhid,
+				use_root_prox=args.readout_use_root_prox,
+				use_subtree=args.readout_use_subtree,
+				use_degree=args.readout_use_degree,
 			)
-			self.readout_fuse = torch.nn.Linear(self.nhid * 2, self.nhid)
+			self.readout_gate = torch.nn.Linear(self.nhid * 2, self.nhid)
 
 		if self.model == 'gcn':
 			self.conv1 = GCNConv(self.num_features, self.nhid)
@@ -85,7 +88,8 @@ class Model(torch.nn.Module):
 				struct_x=struct_x,
 			)
 			base_x = gmp(x, batch)
-			x = F.relu(self.readout_fuse(torch.cat([weighted_x, base_x], dim=1)))
+			gate = torch.sigmoid(self.readout_gate(torch.cat([weighted_x, base_x], dim=1)))
+			x = gate * weighted_x + (1.0 - gate) * base_x
 		else:
 			x = gmp(x, batch)
 
@@ -122,10 +126,39 @@ def set_seed(seed):
 		torch.cuda.manual_seed(seed)
 
 
+def resolve_readout_struct_flags(args):
+	explicit_struct = (
+		args.readout_use_root_prox or
+		args.readout_use_subtree or
+		args.readout_use_degree
+	)
+	if args.readout_no_struct and explicit_struct:
+		raise ValueError('`--readout_no_struct` cannot be combined with per-feature readout flags.')
+	if args.readout_no_struct:
+		return False, False, False
+	if explicit_struct:
+		return args.readout_use_root_prox, args.readout_use_subtree, args.readout_use_degree
+	return True, True, True
+
+
+def build_readout_struct_tag(args):
+	struct_parts = []
+	if args.readout_use_root_prox:
+		struct_parts.append('root')
+	if args.readout_use_subtree:
+		struct_parts.append('subtree')
+	if args.readout_use_degree:
+		struct_parts.append('degree')
+	return '_'.join(struct_parts) if struct_parts else 'none'
+
+
 def build_log_path(args):
 	log_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'logs')
 	os.makedirs(log_dir, exist_ok=True)
-	mode = 'weighted' if args.weighted_readout else 'origin'
+	if args.weighted_readout:
+		mode = f'weighted_{build_readout_struct_tag(args)}'
+	else:
+		mode = 'origin'
 	timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
 	return os.path.join(log_dir, f'{args.dataset}_{mode}_{timestamp}.log')
 
@@ -169,8 +202,17 @@ parser.add_argument('--multi_gpu', type=bool, default=False, help='multi-gpu mod
 parser.add_argument('--feature', type=str, default='bert', help='feature type, [profile, spacy, bert, content]')
 parser.add_argument('--model', type=str, default='sage', help='model type, [gcn, gat, sage]')
 parser.add_argument('--weighted_readout', action='store_true', help='use weighted readout instead of max pooling')
+parser.add_argument('--readout_use_root_prox', action='store_true', help='use root proximity structural feature in weighted readout')
+parser.add_argument('--readout_use_subtree', action='store_true', help='use subtree size structural feature in weighted readout')
+parser.add_argument('--readout_use_degree', action='store_true', help='use node degree structural feature in weighted readout')
+parser.add_argument('--readout_no_struct', action='store_true', help='disable all structural features in weighted readout')
 
 args = parser.parse_args()
+(
+	args.readout_use_root_prox,
+	args.readout_use_subtree,
+	args.readout_use_degree,
+) = resolve_readout_struct_flags(args)
 log_path = build_log_path(args)
 log_handle = open(log_path, 'a', encoding='utf-8')
 stdout_stream = sys.stdout
@@ -186,7 +228,12 @@ dataset = FNNDataset(
 	root='data',
 	feature=args.feature,
 	aux_feature=aux_feature,
-	include_readout=args.weighted_readout,
+	include_readout=args.weighted_readout and (
+		args.readout_use_root_prox or args.readout_use_subtree or args.readout_use_degree
+	),
+	use_root_prox=args.readout_use_root_prox,
+	use_subtree=args.readout_use_subtree,
+	use_degree=args.readout_use_degree,
 	empty=False,
 	name=args.dataset,
 	transform=ToUndirected(),
